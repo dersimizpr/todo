@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yapılacaklar</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --text: #1f2328; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --danger: #dc2626; --done: #9ca3af;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318; --card: #1b1e25; --text: #e6e8eb; --muted: #9aa1ab;
+      --line: #2a2f38; --accent: #60a5fa; --danger: #f87171; --done: #6b7280;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    display: flex; justify-content: center; padding: 48px 16px;
+  }
+  .app { width: 100%; max-width: 560px; }
+  h1 { margin: 0 0 4px; font-size: 28px; }
+  .date { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+  form { display: flex; gap: 8px; margin-bottom: 16px; }
+  input[type=text] {
+    flex: 1; padding: 12px 14px; font-size: 16px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text); outline: none;
+  }
+  input[type=text]:focus { border-color: var(--accent); }
+  button {
+    font: inherit; cursor: pointer; border: none; border-radius: 10px;
+    background: var(--accent); color: #fff; padding: 0 18px; font-weight: 600;
+  }
+  .filters { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filters button {
+    background: transparent; color: var(--muted); padding: 6px 12px;
+    border: 1px solid var(--line); font-weight: 500; font-size: 14px;
+  }
+  .filters button.active { color: var(--accent); border-color: var(--accent); }
+  ul { list-style: none; margin: 0; padding: 0; background: var(--card);
+       border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  li {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  li:last-child { border-bottom: none; }
+  li input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  li .text { flex: 1; word-break: break-word; cursor: text; }
+  li.done .text { text-decoration: line-through; color: var(--done); }
+  li .edit { flex: 1; padding: 6px 8px; font-size: 15px; }
+  li .del {
+    background: transparent; color: var(--muted); font-size: 18px; padding: 2px 8px;
+    opacity: 0; transition: opacity .15s;
+  }
+  li:hover .del, li .del:focus { opacity: 1; }
+  li .del:hover { color: var(--danger); }
+  .empty { padding: 28px; text-align: center; color: var(--muted); }
+  .footer { display: flex; justify-content: space-between; margin-top: 12px;
+            color: var(--muted); font-size: 14px; }
+  .footer button { background: transparent; color: var(--muted); padding: 0; font-weight: 500; }
+  .footer button:hover { color: var(--danger); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Yapılacaklar</h1>
+  <div class="date" id="date"></div>
+
+  <form id="form">
+    <input type="text" id="input" placeholder="Yeni görev ekle..." autocomplete="off" autofocus>
+    <button type="submit">Ekle</button>
+  </form>
+
+  <div class="filters">
+    <button data-f="all" class="active">Tümü</button>
+    <button data-f="active">Aktif</button>
+    <button data-f="done">Tamamlanan</button>
+  </div>
+
+  <ul id="list"></ul>
+
+  <div class="footer">
+    <span id="count"></span>
+    <button id="clear">Tamamlananları sil</button>
+  </div>
+  <div class="hint" id="status"></div>
+  <div class="hint">Düzenlemek için göreve çift tıkla · Veriler Supabase'de saklanır</div>
+</div>
+
+<script>
+  // --- Supabase ayarları ---
+  const SB_URL = 'https://zoitknfmhsgwynrxvtey.supabase.co';
+  const SB_KEY = 'sb_publishable_foYA5psRIXE6v2hWiZLdUg_jc6nhmw7';
+  const API = SB_URL + '/rest/v1/todos';
+
+  let todos = [];
+  let filter = 'all';
+
+  async function sb(method, query = '', body) {
+    const res = await fetch(API + query, {
+      method,
+      headers: {
+        apikey: SB_KEY,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation'
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok) throw new Error(res.status + ' ' + await res.text());
+    return res.status === 204 ? null : res.json();
+  }
+
+  function setStatus(msg, isError) {
+    const el = $('status');
+    el.textContent = msg || '';
+    el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+  }
+
+  async function load() {
+    setStatus('Yükleniyor...');
+    try {
+      todos = await sb('GET', '?select=*&order=created_at.desc');
+      setStatus('');
+    } catch (e) {
+      setStatus('Supabase\'e bağlanılamadı: ' + e.message, true);
+    }
+    render();
+  }
+
+  // Değişikliği önce ekranda yapar, sonra Supabase'e yazar; hata olursa listeyi yeniden çeker.
+  async function sync(fn) {
+    try { await fn(); setStatus(''); }
+    catch (e) { setStatus('Kaydedilemedi: ' + e.message, true); await load(); }
+  }
+
+  const addTodo = text => {
+    const tmp = { id: 'tmp-' + Date.now(), text, done: false };
+    todos.unshift(tmp); render();
+    sync(async () => {
+      const [row] = await sb('POST', '', { text });
+      Object.assign(tmp, row); render();
+    });
+  };
+  const updateTodo = (t, patch) => {
+    Object.assign(t, patch); render();
+    sync(() => sb('PATCH', '?id=eq.' + t.id, patch));
+  };
+  const removeTodos = list => {
+    const ids = list.map(t => t.id);
+    todos = todos.filter(t => !ids.includes(t.id)); render();
+    if (ids.length) sync(() => sb('DELETE', '?id=in.(' + ids.join(',') + ')'));
+  };
+
+  const $ = id => document.getElementById(id);
+  $('date').textContent = new Date().toLocaleDateString('tr-TR',
+    { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+  function render() {
+    const list = $('list');
+    list.innerHTML = '';
+    const shown = todos.filter(t =>
+      filter === 'all' ? true : filter === 'done' ? t.done : !t.done);
+
+    if (!shown.length) {
+      list.innerHTML = '<div class="empty">' +
+        (todos.length ? 'Bu filtrede görev yok.' : 'Henüz görev yok. Yukarıdan ekleyebilirsin.') + '</div>';
+    }
+
+    for (const t of shown) {
+      const li = document.createElement('li');
+      if (t.done) li.className = 'done';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = t.done;
+      cb.onchange = () => updateTodo(t, { done: cb.checked });
+
+      const span = document.createElement('span');
+      span.className = 'text'; span.textContent = t.text;
+      span.ondblclick = () => startEdit(li, span, t);
+
+      const del = document.createElement('button');
+      del.className = 'del'; del.textContent = '✕'; del.title = 'Sil';
+      del.onclick = () => removeTodos([t]);
+
+      li.append(cb, span, del);
+      list.append(li);
+    }
+
+    const left = todos.filter(t => !t.done).length;
+    $('count').textContent = `${left} görev kaldı`;
+    $('clear').style.visibility = todos.some(t => t.done) ? 'visible' : 'hidden';
+  }
+
+  function startEdit(li, span, t) {
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.className = 'edit'; inp.value = t.text;
+    li.replaceChild(inp, span);
+    inp.focus(); inp.select();
+    let finished = false;
+    const finish = (commit) => {
+      if (finished) return; finished = true;
+      const v = inp.value.trim();
+      if (!commit || v === t.text) return render();
+      if (v) updateTodo(t, { text: v }); else removeTodos([t]);
+    };
+    inp.onkeydown = e => {
+      if (e.key === 'Enter') finish(true);
+      if (e.key === 'Escape') finish(false);
+    };
+    inp.onblur = () => finish(true);
+  }
+
+  $('form').onsubmit = e => {
+    e.preventDefault();
+    const v = $('input').value.trim();
+    if (!v) return;
+    $('input').value = '';
+    addTodo(v);
+  };
+
+  document.querySelectorAll('.filters button').forEach(b => {
+    b.onclick = () => {
+      filter = b.dataset.f;
+      document.querySelectorAll('.filters button').forEach(x => x.classList.toggle('active', x === b));
+      render();
+    };
+  });
+
+  $('clear').onclick = () => removeTodos(todos.filter(t => t.done));
+
+  load();
+</script>
+</body>
+</html>
