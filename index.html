@@ -63,15 +63,59 @@
   .footer button { background: transparent; color: var(--muted); padding: 0; font-weight: 500; }
   .footer button:hover { color: var(--danger); }
   .hint { color: var(--muted); font-size: 12px; margin-top: 20px; text-align: center; }
+  [hidden] { display: none !important; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .user { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 14px; padding-top: 8px; }
+  .user button { background: transparent; color: var(--muted); border: 1px solid var(--line);
+                 padding: 6px 12px; font-weight: 500; font-size: 14px; }
+  .user button:hover { color: var(--danger); border-color: var(--danger); }
+  .auth { display: flex; flex-direction: column; gap: 14px; background: var(--card);
+          border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  .auth h2 { margin: 0; font-size: 20px; }
+  .auth label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--muted); }
+  .auth input { padding: 12px 14px; font-size: 16px; border-radius: 10px; border: 1px solid var(--line);
+                background: var(--bg); color: var(--text); outline: none; }
+  .auth input:focus { border-color: var(--accent); }
+  .auth button[type=submit] { padding: 12px; }
+  .auth button:disabled { opacity: .6; cursor: wait; }
+  .auth-error { color: var(--danger); font-size: 14px; min-height: 1em; }
+  .auth-switch { font-size: 14px; color: var(--muted); text-align: center; }
+  .auth-switch button { background: transparent; color: var(--accent); padding: 0 4px; }
 </style>
 </head>
 <body>
 <div class="app">
-  <h1>Yapılacaklar</h1>
-  <div class="date" id="date"></div>
+  <div class="top">
+    <div>
+      <h1>Yapılacaklar</h1>
+      <div class="date" id="date"></div>
+    </div>
+    <div class="user" id="user" hidden>
+      <span id="username"></span>
+      <button id="logout" type="button">Çıkış</button>
+    </div>
+  </div>
 
+  <form id="auth" class="auth" hidden>
+    <h2 id="auth-title">Giriş yap</h2>
+    <label>Kullanıcı adı
+      <input type="text" id="auth-user" autocomplete="username" required
+             pattern="[A-Za-z0-9_.\-]{3,30}" title="3-30 karakter: harf, rakam, _ . -">
+    </label>
+    <label>Şifre
+      <input type="password" id="auth-pass" autocomplete="current-password" required minlength="8">
+    </label>
+    <button type="submit" id="auth-submit">Giriş yap</button>
+    <div class="auth-error" id="auth-error"></div>
+    <div class="auth-switch">
+      <span id="auth-switch-text">Hesabın yok mu?</span>
+      <button type="button" id="auth-switch">Kayıt ol</button>
+    </div>
+  </form>
+
+  <div id="main" hidden>
   <form id="form">
-    <input type="text" id="input" placeholder="Yeni görev ekle..." autocomplete="off" autofocus>
+    <input type="text" id="input" placeholder="Yeni görev ekle..." autocomplete="off">
     <button type="submit">Ekle</button>
   </form>
 
@@ -87,24 +131,33 @@
     <span id="count"></span>
     <button id="clear">Tamamlananları sil</button>
   </div>
-  <div class="hint" id="status"></div>
   <div class="hint">Düzenlemek için göreve çift tıkla · Veriler Supabase'de saklanır</div>
+  </div>
+  <div class="hint" id="status"></div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script>
   // --- Supabase ayarları ---
   const SB_URL = 'https://zoitknfmhsgwynrxvtey.supabase.co';
   const SB_KEY = 'sb_publishable_foYA5psRIXE6v2hWiZLdUg_jc6nhmw7';
   const API = SB_URL + '/rest/v1/todos';
+  // Kullanıcı adı, Supabase'in istediği e-posta biçimine çevrilir (gerçek e-posta gönderilmez).
+  const EMAIL_DOMAIN = '@todo.local';
+
+  const client = supabase.createClient(SB_URL, SB_KEY);
 
   let todos = [];
   let filter = 'all';
 
   async function sb(method, query = '', body) {
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) throw new Error('Oturum kapalı');
     const res = await fetch(API + query, {
       method,
       headers: {
         apikey: SB_KEY,
+        Authorization: 'Bearer ' + session.access_token,
         'Content-Type': 'application/json',
         Prefer: 'return=representation'
       },
@@ -232,7 +285,64 @@
 
   $('clear').onclick = () => removeTodos(todos.filter(t => t.done));
 
-  load();
+  // --- Giriş / kayıt ---
+  let signupMode = false;
+  const authErrors = {
+    'Invalid login credentials': 'Kullanıcı adı veya şifre hatalı.',
+    'User already registered': 'Bu kullanıcı adı alınmış.',
+    'Password should be at least 8 characters.': 'Şifre en az 8 karakter olmalı.'
+  };
+
+  function setMode(signup) {
+    signupMode = signup;
+    $('auth-title').textContent = signup ? 'Kayıt ol' : 'Giriş yap';
+    $('auth-submit').textContent = signup ? 'Kayıt ol' : 'Giriş yap';
+    $('auth-switch-text').textContent = signup ? 'Zaten hesabın var mı?' : 'Hesabın yok mu?';
+    $('auth-switch').textContent = signup ? 'Giriş yap' : 'Kayıt ol';
+    $('auth-pass').autocomplete = signup ? 'new-password' : 'current-password';
+    $('auth-error').textContent = '';
+  }
+  $('auth-switch').onclick = () => setMode(!signupMode);
+
+  $('auth').onsubmit = async e => {
+    e.preventDefault();
+    const username = $('auth-user').value.trim().toLowerCase();
+    const password = $('auth-pass').value;
+    const creds = { email: username + EMAIL_DOMAIN, password };
+    $('auth-submit').disabled = true;
+    $('auth-error').textContent = '';
+    const { error } = signupMode
+      ? await client.auth.signUp(creds)
+      : await client.auth.signInWithPassword(creds);
+    $('auth-submit').disabled = false;
+    if (error) $('auth-error').textContent = authErrors[error.message] || error.message;
+    else $('auth-pass').value = '';
+  };
+
+  $('logout').onclick = () => client.auth.signOut();
+
+  let currentUserId;  // undefined = henüz bir şey gösterilmedi
+  function showSession(session) {
+    const user = session?.user || null;
+    const id = user ? user.id : null;
+    if (id === currentUserId) return;
+    currentUserId = id;
+    $('auth').hidden = !!user;
+    $('main').hidden = !user;
+    $('user').hidden = !user;
+    if (user) {
+      $('username').textContent = user.email.replace(EMAIL_DOMAIN, '');
+      load();
+      $('input').focus();
+    } else {
+      todos = []; render(); setStatus('');
+      setMode(false);
+      $('auth-user').focus();
+    }
+  }
+
+  client.auth.onAuthStateChange((_event, session) => setTimeout(() => showSession(session), 0));
+  client.auth.getSession().then(({ data }) => showSession(data.session));
 </script>
 </body>
 </html>
