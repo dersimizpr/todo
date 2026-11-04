@@ -107,7 +107,8 @@
     </label>
     <button type="submit" id="auth-submit">Giriş yap</button>
     <div class="auth-error" id="auth-error"></div>
-    <div class="auth-switch">
+    <!-- Yeni kayıtlar kapalı. Açmak için: config.toml'da enable_signup = true ve aşağıdaki hidden'ı kaldır. -->
+    <div class="auth-switch" hidden>
       <span id="auth-switch-text">Hesabın yok mu?</span>
       <button type="button" id="auth-switch">Kayıt ol</button>
     </div>
@@ -290,6 +291,7 @@
   const authErrors = {
     'Invalid login credentials': 'Kullanıcı adı veya şifre hatalı.',
     'User already registered': 'Bu kullanıcı adı alınmış.',
+    'Signups not allowed for this instance': 'Yeni kayıtlar kapalı.',
     'Password should be at least 8 characters.': 'Şifre en az 8 karakter olmalı.'
   };
 
