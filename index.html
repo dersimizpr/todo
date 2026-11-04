@@ -81,6 +81,9 @@
   .auth-error { color: var(--danger); font-size: 14px; min-height: 1em; }
   .auth-switch { font-size: 14px; color: var(--muted); text-align: center; }
   .auth-switch button { background: transparent; color: var(--accent); padding: 0 4px; }
+  .auth-info { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .auth-info b { color: var(--text); word-break: break-all; }
+  #verify-code { font-size: 24px; letter-spacing: 6px; text-align: center; }
 </style>
 </head>
 <body>
@@ -98,18 +101,35 @@
 
   <form id="auth" class="auth" hidden>
     <h2 id="auth-title">Giriş yap</h2>
-    <label>Kullanıcı adı
-      <input type="text" id="auth-user" autocomplete="username" required
-             pattern="[A-Za-z0-9_.\-]{3,30}" title="3-30 karakter: harf, rakam, _ . -">
+    <label>E-posta
+      <input type="email" id="auth-email" autocomplete="email" required>
     </label>
     <label>Şifre
       <input type="password" id="auth-pass" autocomplete="current-password" required minlength="8">
+    </label>
+    <label id="auth-pass2-row" hidden>Şifre (tekrar)
+      <input type="password" id="auth-pass2" autocomplete="new-password" minlength="8">
     </label>
     <button type="submit" id="auth-submit">Giriş yap</button>
     <div class="auth-error" id="auth-error"></div>
     <div class="auth-switch">
       <span id="auth-switch-text">Hesabın yok mu?</span>
       <button type="button" id="auth-switch">Kayıt ol</button>
+    </div>
+  </form>
+
+  <form id="verify" class="auth" hidden>
+    <h2>E-postanı onayla</h2>
+    <p class="auth-info"><b id="verify-email"></b> adresine bir onay kodu gönderdik. Kodu aşağıya yaz.</p>
+    <label>Onay kodu
+      <input type="text" id="verify-code" inputmode="numeric" autocomplete="one-time-code"
+             required pattern="[0-9]{6,10}" title="E-postadaki rakamlardan oluşan kod">
+    </label>
+    <button type="submit" id="verify-submit">Onayla</button>
+    <div class="auth-error" id="verify-error"></div>
+    <div class="auth-switch">
+      <button type="button" id="verify-resend">Kodu tekrar gönder</button> ·
+      <button type="button" id="verify-back">Geri dön</button>
     </div>
   </form>
 
@@ -142,8 +162,6 @@
   const SB_URL = 'https://zoitknfmhsgwynrxvtey.supabase.co';
   const SB_KEY = 'sb_publishable_foYA5psRIXE6v2hWiZLdUg_jc6nhmw7';
   const API = SB_URL + '/rest/v1/todos';
-  // Kullanıcı adı, Supabase'in istediği e-posta biçimine çevrilir (gerçek e-posta gönderilmez).
-  const EMAIL_DOMAIN = '@todo.local';
 
   const client = supabase.createClient(SB_URL, SB_KEY);
 
@@ -287,11 +305,21 @@
 
   // --- Giriş / kayıt ---
   let signupMode = false;
+  let pendingEmail = '';
   const authErrors = {
-    'Invalid login credentials': 'Kullanıcı adı veya şifre hatalı.',
-    'User already registered': 'Bu kullanıcı adı alınmış.',
+    'Invalid login credentials': 'E-posta veya şifre hatalı.',
+    'User already registered': 'Bu e-posta ile zaten bir hesap var.',
     'Signups not allowed for this instance': 'Yeni kayıtlar kapalı.',
-    'Password should be at least 8 characters.': 'Şifre en az 8 karakter olmalı.'
+    'Password should be at least 8 characters.': 'Şifre en az 8 karakter olmalı.',
+    'Token has expired or is invalid': 'Kod hatalı ya da süresi dolmuş.',
+    'Email not confirmed': 'E-posta henüz onaylanmadı.',
+    'Unable to validate email address: invalid format': 'Geçerli bir e-posta adresi yaz.',
+    'Error sending confirmation email': 'Onay e-postası gönderilemedi. Biraz sonra tekrar dene.'
+  };
+  const trError = err => {
+    if (/only request this after|rate limit/i.test(err.message))
+      return 'Çok sık denedin. Bir dakika bekleyip tekrar dene.';
+    return authErrors[err.message] || err.message;
   };
 
   function setMode(signup) {
@@ -301,24 +329,77 @@
     $('auth-switch-text').textContent = signup ? 'Zaten hesabın var mı?' : 'Hesabın yok mu?';
     $('auth-switch').textContent = signup ? 'Giriş yap' : 'Kayıt ol';
     $('auth-pass').autocomplete = signup ? 'new-password' : 'current-password';
+    $('auth-pass2-row').hidden = !signup;
+    $('auth-pass2').required = signup;
     $('auth-error').textContent = '';
   }
   $('auth-switch').onclick = () => setMode(!signupMode);
 
+  function showVerify(email) {
+    pendingEmail = email;
+    $('verify-email').textContent = email;
+    $('verify-code').value = '';
+    $('verify-error').textContent = '';
+    $('auth').hidden = true;
+    $('verify').hidden = false;
+    $('verify-code').focus();
+  }
+  function showLogin() {
+    $('verify').hidden = true;
+    $('auth').hidden = false;
+    $('auth-email').focus();
+  }
+
   $('auth').onsubmit = async e => {
     e.preventDefault();
-    const username = $('auth-user').value.trim().toLowerCase();
+    const email = $('auth-email').value.trim().toLowerCase();
     const password = $('auth-pass').value;
-    const creds = { email: username + EMAIL_DOMAIN, password };
+    if (signupMode && password !== $('auth-pass2').value) {
+      $('auth-error').textContent = 'Şifreler aynı değil.';
+      return;
+    }
     $('auth-submit').disabled = true;
     $('auth-error').textContent = '';
-    const { error } = signupMode
-      ? await client.auth.signUp(creds)
-      : await client.auth.signInWithPassword(creds);
+    let error, data;
+    if (signupMode) {
+      ({ data, error } = await client.auth.signUp({ email, password }));
+      // Onaylanmış bir e-posta tekrar kaydedilirse Supabase hata vermez, boş kimlikle döner.
+      if (!error && data.user && data.user.identities?.length === 0)
+        error = { message: 'User already registered' };
+    } else {
+      ({ error } = await client.auth.signInWithPassword({ email, password }));
+      if (error?.message === 'Email not confirmed') {
+        // Onaylanmamış hesap: yeni kod gönder ve onay ekranına geç.
+        await client.auth.resend({ type: 'signup', email });
+        error = null; data = { needsVerify: true };
+      }
+    }
     $('auth-submit').disabled = false;
-    if (error) $('auth-error').textContent = authErrors[error.message] || error.message;
-    else $('auth-pass').value = '';
+    if (error) { $('auth-error').textContent = trError(error); return; }
+    $('auth-pass').value = ''; $('auth-pass2').value = '';
+    if (signupMode || data?.needsVerify) showVerify(email);
   };
+
+  $('verify').onsubmit = async e => {
+    e.preventDefault();
+    $('verify-submit').disabled = true;
+    $('verify-error').textContent = '';
+    const { error } = await client.auth.verifyOtp({
+      email: pendingEmail, token: $('verify-code').value.trim(), type: 'email'
+    });
+    $('verify-submit').disabled = false;
+    if (error) $('verify-error').textContent = trError(error);
+    // Başarılıysa oturum açılır, onAuthStateChange listeyi gösterir.
+  };
+
+  $('verify-resend').onclick = async () => {
+    $('verify-error').textContent = '';
+    const { error } = await client.auth.resend({ type: 'signup', email: pendingEmail });
+    $('verify-error').style.color = error ? '' : 'var(--muted)';
+    $('verify-error').textContent = error ? trError(error) : 'Yeni kod gönderildi.';
+    setTimeout(() => { $('verify-error').style.color = ''; }, 4000);
+  };
+  $('verify-back').onclick = () => { setMode(false); showLogin(); };
 
   $('logout').onclick = () => client.auth.signOut();
 
@@ -329,16 +410,17 @@
     if (id === currentUserId) return;
     currentUserId = id;
     $('auth').hidden = !!user;
+    $('verify').hidden = true;
     $('main').hidden = !user;
     $('user').hidden = !user;
     if (user) {
-      $('username').textContent = user.email.replace(EMAIL_DOMAIN, '');
+      $('username').textContent = user.email;
       load();
       $('input').focus();
     } else {
       todos = []; render(); setStatus('');
       setMode(false);
-      $('auth-user').focus();
+      $('auth-email').focus();
     }
   }
 

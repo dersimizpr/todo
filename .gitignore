@@ -1,3 +1,4 @@
 .supabase-db-password.txt
 supabase/.temp/
 .env
+brevo-smtp.env
